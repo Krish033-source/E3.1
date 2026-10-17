@@ -14,6 +14,9 @@ DATA = os.path.join(BASE, "data"); os.makedirs(DATA, exist_ok=True)
 FILE = os.path.join(DATA, "visits.jsonl")
 LOCK = threading.Lock()
 V = OrderedDict(); HITS = {}; FP = {}; GEO = {}
+# IPs that hit a trap endpoint before any /d.js-backed visit record existed
+# (e.g. a scraper that goes straight for /trap/ai with no prior page load).
+TRAP_IPS = {}
 
 def save(v):
     with LOCK, open(FILE, "a") as f: f.write(json.dumps(v) + "\n")
@@ -52,6 +55,8 @@ def mk():
     v = {"id": secrets.token_hex(6), "t": t, "ip": ip, "path": request.full_path.rstrip("?")[:200],
          "ua": request.headers.get("User-Agent", ""), "h": h, "https": request.is_secure,
          "rate": len(a), "traps": [], "js": False}
+    if ip in TRAP_IPS:
+        v["traps"].extend(TRAP_IPS[ip])
     V[v["id"]] = v
     if len(V) > 5000: V.popitem(last=False)
     bg_geo(v); return v
@@ -294,6 +299,56 @@ def gw_after(r):
     rec = g.get("gw")
     if rec: rec["st"] = r.status_code
     return r
+
+# ------------------------- Trap endpoints -------------------------
+# These paths are only reachable via the hidden, off-screen links that
+# demo_site.py places on the home page. A real human visiting normally
+# will never click them (they're not rendered visibly); anything that
+# requests one of these paths is, by construction, parsing/following
+# raw HTML links rather than looking at the rendered page.
+@app.after_request
+def trap_after(r):
+    p = request.path.lstrip("/")
+    if p in ("trap/link", "trap/ai"):
+        kind = "ai" if p == "trap/ai" else "link"
+        ip = ip_of()
+        vid = request.cookies.get("vid")
+        v = V.get(vid)
+        if v and v["ip"] == ip:
+            # Normal path: we already have a visit record (from the JS
+            # challenge flow) for this cookie — attach the trap hit to it
+            # so classify() picks it up next time /result is viewed.
+            if kind not in v["traps"]:
+                v["traps"].append(kind)
+                save(v)
+        else:
+            # No visit record yet — e.g. a scraper that went straight for
+            # the trap URL with no cookie at all. Remember it by IP so
+            # that if/when a visit record for this IP does get created
+            # (via mk()), it inherits the trap flag immediately. Also
+            # record a synthetic lightweight entry directly so it shows
+            # up in /result even if no JS-challenge visit ever happens.
+            TRAP_IPS.setdefault(ip, [])
+            if kind not in TRAP_IPS[ip]:
+                TRAP_IPS[ip].append(kind)
+            synthetic = {
+                "id": secrets.token_hex(6), "t": int(time.time() * 1000), "ip": ip,
+                "path": request.full_path.rstrip("?")[:200],
+                "ua": request.headers.get("User-Agent", ""), "h": {}, "https": request.is_secure,
+                "rate": 0, "traps": [kind], "js": False,
+            }
+            V[synthetic["id"]] = synthetic
+            if len(V) > 5000: V.popitem(last=False)
+            save(synthetic)
+    return r
+
+@app.get("/trap/link")
+@app.get("/trap/ai")
+def trap_hit():
+    # Serve something innocuous-looking so the requester doesn't learn
+    # anything from the response itself; the real signal is recorded in
+    # trap_after() above, keyed off this same request.
+    return Response("Not found", 404, mimetype="text/plain")
 
 @app.get("/__gw/status")
 def gw_status():
