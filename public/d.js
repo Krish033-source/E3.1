@@ -19,7 +19,7 @@ addEventListener('mousemove',e=>{
 addEventListener('pointerdown',()=>down=true,true);addEventListener('pointerup',()=>down=false,true);
 addEventListener('click',e=>{
   fi();b.clicks++;ac.push(now());if(!e.isTrusted)b.untrusted++;
-  if(e.pointerType!=='touch'&&e.timeStamp-lastMove>400)b.noMove++;
+  if(e.pointerType==='mouse'&&e.detail>0&&(!last||Math.hypot(e.clientX-last.x,e.clientY-last.y)>40))b.noMove++;
   const r=e.target.getBoundingClientRect?e.target.getBoundingClientRect():null;
   if(r&&r.width<600&&Math.abs(e.clientX-(r.left+r.width/2))<1.5&&Math.abs(e.clientY-(r.top+r.height/2))<1.5)b.center++;
 },true);
@@ -41,7 +41,6 @@ async function env(){
   e.win=[innerWidth,innerHeight,outerWidth,outerHeight];
   e.tz=Intl.DateTimeFormat().resolvedOptions().timeZone;e.rtt=n.connection?n.connection.rtt:null;
   e.brands=((n.userAgentData&&n.userAgentData.brands)||[]).map(x=>x.brand).join(',');
-  try{e.voices=speechSynthesis.getVoices().length}catch{}
   const re=/^(\$?cdc_|__playwright|__pw_|_playwright|__puppeteer|puppeteer|_phantom|callPhantom|__nightmare|domAutomation|_selenium|__selenium|__webdriver|webdriver|__driver|_Selenium_IDE|__lastWatir)/i;
   e.auto=[...Object.getOwnPropertyNames(w),...Object.getOwnPropertyNames(document)].filter(k=>re.test(k)).slice(0,5);
   if(document.documentElement.getAttribute('webdriver')!==null)e.auto.push('html[webdriver]');
@@ -56,11 +55,11 @@ async function env(){
   return e;
 }
 function summ(){const g=[];for(let i=1;i<ac.length;i++)g.push(ac[i]-ac[i-1]);
-  return{...b,spdCV:cv(sp),straight:mean(st),keyCV:cv(kd),gapN:g.length,gapCV:cv(g),gapMean:mean(g),tFirst:first,tNow:Math.round(now()-T0)}}
+  return{...b,spdCV:cv(sp),straight:mean(st),keyCV:cv(kd),gapN:g.length,gapCV:cv(g),gapMean:mean(g),tFirst:first,tNow:Math.round(now()-T0),win:[innerWidth,innerHeight,outerWidth,outerHeight],vis:document.visibilityState}}
 let sent=0;
 function send(final){if(!E||sent>80)return;sent++;
   const p=JSON.stringify({vid,env:E,beh:summ(),final:!!final});
   try{navigator.sendBeacon('/api/collect',new Blob([p],{type:'application/json'}))}catch{fetch('/api/collect',{method:'POST',body:p,keepalive:true,headers:{'Content-Type':'application/json'}})}}
-env().then(e=>{E=e;send();setTimeout(send,2000);setInterval(send,4000)});
+env().then(e=>{E=e;send();setTimeout(send,700);setInterval(send,1500)});
 addEventListener('pagehide',()=>send(true));
 })();
