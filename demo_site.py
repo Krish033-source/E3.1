@@ -1,9 +1,16 @@
-"""Built-in demo upstream: a fake satellite-telemetry portal (all data is synthetic)."""
+"""KRB Orbital satellite telemetry portal."""
+
 import math, time, hmac, html, io
+
 from datetime import datetime, timezone
 from flask import Response, jsonify, redirect
 
 esc = html.escape
+
+# Decoy link targets. app.py overwrites these from env at start-up.
+TRAP_LINK = "/legal/terms-of-service"
+TRAP_DOC = "/docs/developer-guide"
+
 USERS = {"guest": ("guest123", "viewer"), "analyst": ("Telemetry#7", "analyst"), "operator": ("Orbit@2026", "operator")}
 RANK = {"viewer": 1, "analyst": 2, "operator": 3}
 SATS = [
@@ -11,9 +18,9 @@ SATS = [
  dict(id=2, name="AURORA-2", mission="Polar weather & aurora imaging", orbit="Polar LEO", alt=640, incl=98.1, period=97.5, launch="2023-11-02", norad="58870"),
  dict(id=3, name="NIMBUS-3", mission="Atmospheric sounding (GNSS-RO)", orbit="Mid-inclination LEO", alt=480, incl=52.0, period=94.0, launch="2024-06-21", norad="60112"),
  dict(id=4, name="VEGA-4", mission="Maritime AIS tracking", orbit="LEO", alt=550, incl=53.0, period=95.6, launch="2024-09-09", norad="60544"),
- dict(id=5, name="SENTINEL-5", mission="Optical comms technology demo", orbit="Sun-synchronous LEO", alt=585, incl=97.7, period=96.2, launch="2025-02-27", norad="62003"),
+ dict(id=5, name="SENTINEL-5", mission="Optical communications payload (laser downlink)", orbit="Sun-synchronous LEO", alt=585, incl=97.7, period=96.2, launch="2025-02-27", norad="62003"),
 ]
-CSS = "body{margin:0;font:15px/1.6 system-ui;background:#0b1020;color:#dbe4ff}a{color:#7cc4ff;text-decoration:none;margin-left:6px}header{display:flex;gap:14px;align-items:center;padding:14px 24px;background:#0f1730;border-bottom:1px solid #1e2a4a}header b{margin-right:auto;letter-spacing:.08em}main{max-width:980px;margin:28px auto;padding:0 20px}table{width:100%;border-collapse:collapse}td,th{padding:8px 10px;border-bottom:1px solid #1e2a4a;text-align:left}.card{background:#111a36;border:1px solid #1e2a4a;border-radius:10px;padding:16px;margin:12px 0}.g{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}input,button{font:inherit;padding:9px 12px;border-radius:6px;border:1px solid #2a3a66;background:#0b1020;color:#dbe4ff}button{background:#2563eb;border:0;cursor:pointer}small,.m{color:#8b9bc7}.ok{color:#4ade80}.bad{color:#f87171}code{background:#0b1020;padding:2px 6px;border-radius:4px}"
+CSS = "body{margin:0;font:15px/1.6 system-ui;background:#0b1020;color:#dbe4ff}a{color:#7cc4ff;text-decoration:none;margin-left:6px}header{display:flex;gap:14px;align-items:center;padding:14px 24px;background:#0f1730;border-bottom:1px solid #1e2a4a}header b{margin-right:auto;letter-spacing:.08em}main{max-width:980px;margin:28px auto;padding:0 20px}table{width:100%;border-collapse:collapse}td,th{padding:8px 10px;border-bottom:1px solid #1e2a4a;text-align:left}.card{background:#111a36;border:1px solid #1e2a4a;border-radius:10px;padding:16px;margin:12px 0}.g{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}input,button{font:inherit;padding:9px 12px;border-radius:6px;border:1px solid #2a3a66;background:#0b1020;color:#dbe4ff}button{background:#2563eb;border:0;cursor:pointer}small,.m{color:#8b9bc7}.ok{color:#4ade80}.bad{color:#f87171}code{background:#0b1020;padding:2px 6px;border-radius:4px}footer{max-width:980px;margin:40px auto 24px;padding:0 20px;color:#8b9bc7;font-size:13px}"
 
 def tel(s, t):
     P = s["period"] * 60; ph = (t % P) / P; a = 2 * math.pi * ph; sun = math.sin(a) > 0
@@ -32,6 +39,7 @@ def spark(vals, w=320, h=50):
 def mk_sess(u, secret):
     exp = int(time.time()) + 3600
     return f"{u}.{exp}.{hmac.new(secret, f'{u}|{exp}'.encode(), 'sha256').hexdigest()[:24]}"
+
 def who(req, secret):
     try:
         u, exp, sig = req.cookies.get("sess", "").split(".")
@@ -41,25 +49,21 @@ def who(req, secret):
 
 def page(title, body, u, status=200):
     nav = '<a href="/satellites">Satellites</a><a href="/api">API</a>' + (f'<a href="/dashboard">Dashboard</a><a href="/logout">Logout ({esc(u)})</a>' if u else '<a href="/login">Sign in</a>')
-    return Response(f"<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>{esc(title)} · KRB Orbital</title><style>{CSS}</style><header><b>◉ KRB ORBITAL</b>{nav}</header><main>{body}</main>", status, mimetype="text/html")
+    foot = "<footer>© 2026 KRB Orbital · Mission operations portal</footer>"
+    return Response(f"<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>{esc(title)} · KRB Orbital</title><style>{CSS}</style><header><b>◉ KRB ORBITAL</b>{nav}</header><main>{body}</main>{foot}", status, mimetype="text/html")
 
 def sat_of(x):
     return next((s for s in SATS if str(s["id"]) == x), None)
+
 def need(u, role="viewer"): return u and RANK[USERS[u][1]] >= RANK[role]
 
 def handle(p, req, secret):
     u = who(req, secret); t = int(time.time()); p = p.rstrip("/")
     if p == "":
         cards = "".join(f"<div class=card><b><a href='/satellites/{s['id']}'>{s['name']}</a></b><br><small>{s['mission']}</small><br><small>{s['orbit']} · {s['alt']} km</small></div>" for s in SATS)
-        # Hidden, off-screen links for trap/bot-detection purposes.
-        # No AI-targeted wording — plain, plausible link text only, so a
-        # scraper/agent that blindly follows every <a href> in the DOM
-        # still hits it, without tipping off anything reading the text.
-        trap = (
-            "<a href='/trap/link' style='position:absolute;left:-9999px;top:-9999px' tabindex=-1 aria-hidden=true>Terms of Service</a>"
-            "<a href='/trap/ai' style='position:absolute;left:-9999px;top:-9999px' tabindex=-1 aria-hidden=true>Documentation</a>"
-        )
-        return page("Home", f"<h1>Satellite Telemetry Portal</h1><p class=m>Mission operations and open-data access for the KRB constellation. Public specifications are open; live telemetry and data products need an account.</p><div class=g>{cards}</div>{trap}", u)
+        hide = "style='position:absolute;left:-9999px;top:-9999px' tabindex=-1 aria-hidden=true"
+        decoy = f"<a href='{TRAP_LINK}' {hide}>Terms of Service</a><a href='{TRAP_DOC}' {hide}>Documentation</a>"
+        return page("Home", f"<h1>Satellite Telemetry Portal</h1><p class=m>Mission operations and open-data access for the KRB constellation. Public specifications are open; live telemetry and data products need an account.</p><div class=g>{cards}</div>{decoy}", u)
     if p == "login":
         err = ""
         if req.method == "POST":
@@ -113,5 +117,5 @@ def handle(p, req, secret):
         return Response(buf.getvalue(), mimetype="text/csv")
     return page("Not found", "<h1>404</h1><p>That page doesn't exist.</p>", u, 404)
 
-LOGIN = """<h1>Sign in</h1>__ERR__<form method=post class=card><p><input name=username placeholder=Username autocomplete=username></p><p><input name=password type=password placeholder=Password autocomplete=current-password></p><button>Sign in</button></form>
-<div class=card><b>Demo accounts</b> <small>(synthetic environment)</small><table><tr><td>guest</td><td><code>guest123</code></td><td>viewer</td></tr><tr><td>analyst</td><td><code>Telemetry#7</code></td><td>telemetry + CSV + passes</td></tr><tr><td>operator</td><td><code>Orbit@2026</code></td><td>everything + command queue</td></tr></table></div>"""
+# "website" is a honeypot field: invisible to people, tempting to form-filling bots/agents.
+LOGIN = """<h1>Sign in</h1>__ERR__<form method=post class=card><p><input name=username placeholder=Username autocomplete=username></p><p><input name=password type=password placeholder=Password autocomplete=current-password></p><p style="position:absolute;left:-9999px;top:-9999px" aria-hidden=true><input name=website tabindex=-1 autocomplete=off></p><button>Sign in</button></form>"""
